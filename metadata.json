@@ -1,0 +1,6 @@
+{
+  "name": "FlipStream — Eye-Care Magazine & RSS Reader",
+  "description": "A Flipboard-inspired vertical swipe news magazine and multi-source RSS reader with Pure Midnight OLED eye-protective themes and iOS/Android interfaces.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
