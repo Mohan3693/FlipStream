@@ -1,0 +1,91 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net: Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Hardened Primitives
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // 3. Entity Validation Blueprint for UserReaderSettings
+    function isValidUserReaderSettings(data, userId) {
+      return data.keys().hasAll([
+        'uid',
+        'displayName',
+        'bio',
+        'refreshIntervalMinutes',
+        'viewMode',
+        'theme',
+        'bookmarkedIds',
+        'enabledCategories',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'uid',
+        'displayName',
+        'bio',
+        'refreshIntervalMinutes',
+        'viewMode',
+        'theme',
+        'bookmarkedIds',
+        'enabledCategories',
+        'updatedAt'
+      ]) &&
+      data.uid is string && data.uid == userId && data.uid.size() <= 128 &&
+      data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
+      data.bio is string && data.bio.size() <= 240 &&
+      data.refreshIntervalMinutes is int && data.refreshIntervalMinutes >= 0 && data.refreshIntervalMinutes <= 120 &&
+      data.viewMode is string && (data.viewMode == 'cards' || data.viewMode == 'grid') &&
+      data.theme is string && (
+        data.theme == 'oled-midnight' ||
+        data.theme == 'warm-sepia' ||
+        data.theme == 'eink-slate' ||
+        data.theme == 'gallery-stark'
+      ) &&
+      data.bookmarkedIds is list && data.bookmarkedIds.size() <= 50 &&
+      (data.bookmarkedIds.size() == 0 || (data.bookmarkedIds[0] is string && data.bookmarkedIds[0].size() <= 160)) &&
+      data.enabledCategories is list && data.enabledCategories.size() >= 1 && data.enabledCategories.size() <= 12 &&
+      (data.enabledCategories[0] is string && data.enabledCategories[0].size() <= 24) &&
+      data.updatedAt == request.time;
+    }
+
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow create: if isOwner(userId) && isValidId(userId) && isValidUserReaderSettings(incoming(), userId);
+      allow update: if isOwner(userId) && isValidId(userId) && isValidUserReaderSettings(incoming(), userId) && (
+        incoming().uid == existing().uid &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'displayName',
+          'bio',
+          'refreshIntervalMinutes',
+          'viewMode',
+          'theme',
+          'bookmarkedIds',
+          'enabledCategories',
+          'updatedAt'
+        ])
+      );
+      allow delete: if isOwner(userId) && isValidId(userId);
+    }
+  }
+}

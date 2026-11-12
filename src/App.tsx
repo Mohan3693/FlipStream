@@ -1,52 +1,119 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Search,
-  Bookmark,
-  Rss,
-  Eye,
-  Smartphone,
-  Monitor,
-  Code2,
-  Compass,
-  BookOpen,
+  Home,
+  User,
+  RefreshCw,
 } from 'lucide-react';
 import {
+  ALL_CATEGORIES,
   CategoryId,
-  DeviceMode,
-  EyeCareSettings,
-  NewsArticle,
-  RssSource,
+  DEFAULT_ENABLED_CATEGORIES,
   DEFAULT_SOURCES,
   CURATED_ARTICLES,
+  EyeCareSettings,
+  FeedViewMode,
+  NewsArticle,
+  RssSource,
+  SpecificCategoryId,
+  fetchBatchLiveRssFeeds,
   fetchLiveRssFeed,
+  purgeArticlesOlderThanThreeDays,
 } from './services/rssService';
-import { THEME_PALETTES, renderBionicText } from './utils/themeUtils';
+import { THEME_PALETTES } from './utils/themeUtils';
 import { VerticalCardDeck } from './components/VerticalCardDeck';
 import { ReaderModal } from './components/ReaderModal';
-import { EyeCarePanel } from './components/EyeCarePanel';
-import { SourceManagerModal } from './components/SourceManagerModal';
-import { NativeCodeModal } from './components/NativeCodeModal';
-import { DeviceShellWrapper } from './components/DeviceShellWrapper';
+import { ExploreView } from './components/ExploreView';
+import { ProfileView, UserProfile, LunarAvatar } from './components/ProfileView';
+import {
+  auth,
+  db,
+  doc,
+  getDoc,
+  setDoc,
+  serverTimestamp,
+  googleProvider,
+  signInWithPopup,
+  firebaseSignOut,
+  onAuthStateChanged,
+  handleFirestoreError,
+  OperationType,
+} from './firebase';
+
+type MainNavTab = 'feed' | 'explore' | 'profile';
 
 const STORAGE_KEYS = {
-  BOOKMARKS: 'flipstream_bookmarks_v1',
-  EYECARE: 'flipstream_eyecare_v1',
-  SOURCES: 'flipstream_sources_v1',
-  CUSTOM_ARTICLES: 'flipstream_custom_articles_v1',
+  BOOKMARKS: 'flipstream_bookmarks_v7',
+  HISTORY: 'flipstream_history_v7',
+  EYECARE: 'flipstream_eyecare_v7',
+  SOURCES: 'flipstream_sources_v7',
+  LIVE_ARTICLES: 'flipstream_live_articles_v7',
+  USER_PROFILE: 'flipstream_user_profile_v7',
+  VIEW_MODE: 'flipstream_view_mode_v7',
+  REFRESH_MINUTES: 'flipstream_refresh_mins_v7',
+  ENABLED_CATS: 'flipstream_enabled_cats_v7',
 };
 
 const DEFAULT_EYECARE: EyeCareSettings = {
-  theme: 'oled-midnight',
-  amberShieldPercent: 15,
+  theme: 'gallery-stark',
+  amberShieldPercent: 0,
   dimmerPercent: 0,
   fontScale: 'md',
-  fontFamily: 'serif',
+  fontFamily: 'sans',
   bionicReading: false,
-  reducedMotion: false,
+};
+
+const DEFAULT_USER: UserProfile = {
+  name: 'Satish Mohan',
+  email: 'satishmohan3693@gmail.com',
+  bio: 'Following real-time dispatches across AI, Cybersecurity, Global Defense, Sports, and Tech.',
+  role: 'Verified Reader',
+  authProvider: 'google',
+  isLoggedIn: true,
+  joinedDate: 'November 2026',
 };
 
 export default function App() {
-  // Persistent Eye-Care Settings (Default: Pure Midnight OLED with muted slate typography)
+  // 3-Option Bottom Navigation: 'explore' (left) | 'feed' (center) | 'profile' (right)
+  const [activeTab, setActiveTab] = useState<MainNavTab>('feed');
+
+  // Feed View Mode: 'cards' (Short Card Flip) | 'grid' (Magazine Grid)
+  const [viewMode, setViewMode] = useState<FeedViewMode>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.VIEW_MODE);
+      return saved === 'grid' || saved === 'cards' ? saved : 'cards';
+    } catch {
+      return 'cards';
+    }
+  });
+
+  // Customizable Automatic RSS Refresh Interval (Default: 5 minutes)
+  const [refreshIntervalMinutes, setRefreshIntervalMinutes] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.REFRESH_MINUTES);
+      return saved !== null ? Number(saved) : 5;
+    } catch {
+      return 5;
+    }
+  });
+
+  const [nextScanCountdownSeconds, setNextScanCountdownSeconds] = useState<number>(
+    () => refreshIntervalMinutes * 60
+  );
+  const [lastScannedLabel, setLastScannedLabel] = useState<string>('Scanning live...');
+  const [purgedExpiredCount, setPurgedExpiredCount] = useState<number>(0);
+
+  // Enabled Category Sections (Tech, AI, Security, Wars, Sports, World, Business, Science, Culture)
+  const [enabledCategories, setEnabledCategories] = useState<SpecificCategoryId[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.ENABLED_CATS);
+      return saved ? JSON.parse(saved) : DEFAULT_ENABLED_CATEGORIES;
+    } catch {
+      return DEFAULT_ENABLED_CATEGORIES;
+    }
+  });
+
+  // Eye-Care & Theme State
   const [eyeCare, setEyeCare] = useState<EyeCareSettings>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.EYECARE);
@@ -56,7 +123,19 @@ export default function App() {
     }
   });
 
-  // Persistent RSS Sources
+  // User Profile & Auth State
+  const [userProfile, setUserProfile] = useState<UserProfile>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.USER_PROFILE);
+      return saved ? JSON.parse(saved) : DEFAULT_USER;
+    } catch {
+      return DEFAULT_USER;
+    }
+  });
+  const [isAuthLoading, setIsAuthLoading] = useState(false);
+  const [cloudSynced, setCloudSynced] = useState(false);
+
+  // RSS Sources State (24 sources across 9 categories)
   const [sources, setSources] = useState<RssSource[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.SOURCES);
@@ -66,42 +145,48 @@ export default function App() {
     }
   });
 
-  // Articles (Curated + Live Syndicated RSS Items)
-  const [customArticles, setCustomArticles] = useState<NewsArticle[]>(() => {
+  // Live Syndicated Articles State (Filtered on boot for < 3 days old)
+  const [liveArticles, setLiveArticles] = useState<NewsArticle[]>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEYS.CUSTOM_ARTICLES);
+      const saved = localStorage.getItem(STORAGE_KEYS.LIVE_ARTICLES);
+      if (!saved) return [];
+      const parsed: NewsArticle[] = JSON.parse(saved);
+      const { freshArticles } = purgeArticlesOlderThanThreeDays(parsed);
+      return freshArticles;
+    } catch {
+      return [];
+    }
+  });
+
+  // Saved Bookmarks & Reading History IDs
+  const [bookmarkedIds, setBookmarkedIds] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.BOOKMARKS);
+      return saved
+        ? JSON.parse(saved)
+        : ['art-ai-1', 'art-sec-1', 'art-tech-1'];
+    } catch {
+      return ['art-ai-1', 'art-sec-1', 'art-tech-1'];
+    }
+  });
+
+  const [historyIds, setHistoryIds] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.HISTORY);
       return saved ? JSON.parse(saved) : [];
     } catch {
       return [];
     }
   });
 
-  // Persistent Bookmarks
-  const [bookmarkedIds, setBookmarkedIds] = useState<string[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.BOOKMARKS);
-      return saved ? JSON.parse(saved) : ['art-tech-1', 'art-science-1'];
-    } catch {
-      return ['art-tech-1', 'art-science-1'];
-    }
-  });
-
-  // Navigation & UI States
+  // Feed Category & Reader States
   const [selectedCategory, setSelectedCategory] = useState<CategoryId>('all');
-  const [showSavedOnly, setShowSavedOnly] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [deviceMode, setDeviceMode] = useState<DeviceMode>('responsive');
   const [activeIndex, setActiveIndex] = useState(0);
   const [readerArticle, setReaderArticle] = useState<NewsArticle | null>(null);
-  const [isSourceModalOpen, setIsSourceModalOpen] = useState(false);
-  const [isCodeModalOpen, setIsCodeModalOpen] = useState(false);
-  const [isMobileEyeCareOpen, setIsMobileEyeCareOpen] = useState(false);
   const [isSyncingRss, setIsSyncingRss] = useState(false);
-  const [speakingArticleId, setSpeakingArticleId] = useState<string | null>(null);
 
   const palette = THEME_PALETTES[eyeCare.theme];
 
-  // Sync dark class on html element
   useEffect(() => {
     if (palette.isDark) {
       document.documentElement.classList.add('dark');
@@ -110,106 +195,311 @@ export default function App() {
     }
   }, [palette.isDark]);
 
-  // Save state to localStorage
+  // Listen to Firebase Auth state & load user settings from Firestore
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
+      if (fbUser) {
+        const userDocPath = `users/${fbUser.uid}`;
+        let loadedSettings = false;
+        try {
+          const snap = await getDoc(doc(db, 'users', fbUser.uid));
+          if (snap.exists()) {
+            const data = snap.data();
+            loadedSettings = true;
+            if (typeof data.refreshIntervalMinutes === 'number') {
+              setRefreshIntervalMinutes(data.refreshIntervalMinutes);
+            }
+            if (data.viewMode === 'cards' || data.viewMode === 'grid') {
+              setViewMode(data.viewMode);
+            }
+            if (data.theme && THEME_PALETTES[data.theme as EyeCareSettings['theme']]) {
+              setEyeCare((prev) => ({ ...prev, theme: data.theme }));
+            }
+            if (Array.isArray(data.bookmarkedIds)) {
+              setBookmarkedIds(data.bookmarkedIds.slice(0, 50));
+            }
+            if (Array.isArray(data.enabledCategories) && data.enabledCategories.length > 0) {
+              setEnabledCategories(data.enabledCategories.slice(0, 12));
+            }
+            setUserProfile({
+              uid: fbUser.uid,
+              name: data.displayName || fbUser.displayName || 'Satish Mohan',
+              email: fbUser.email || '',
+              photoUrl: fbUser.photoURL || undefined,
+              bio:
+                data.bio ||
+                'Following real-time dispatches across AI, Cybersecurity, Global Defense, Sports, and Tech.',
+              role: 'Google Verified Member',
+              authProvider: 'google',
+              isLoggedIn: true,
+              joinedDate: 'Verified Account',
+            });
+            setCloudSynced(true);
+          }
+        } catch (err) {
+          handleFirestoreError(err, OperationType.GET, userDocPath);
+        }
+
+        if (!loadedSettings) {
+          const newProfile: UserProfile = {
+            uid: fbUser.uid,
+            name: (fbUser.displayName || 'Satish Mohan').slice(0, 80),
+            email: fbUser.email || '',
+            photoUrl: fbUser.photoURL || undefined,
+            bio: 'Following real-time dispatches across AI, Cybersecurity, Global Defense, Sports, and Tech.',
+            role: 'Google Verified Member',
+            authProvider: 'google',
+            isLoggedIn: true,
+            joinedDate: 'Verified Account',
+          };
+          setUserProfile(newProfile);
+          if (fbUser.emailVerified) {
+            try {
+              await setDoc(doc(db, 'users', fbUser.uid), {
+                uid: fbUser.uid,
+                displayName: newProfile.name.slice(0, 80),
+                bio: newProfile.bio.slice(0, 240),
+                refreshIntervalMinutes,
+                viewMode,
+                theme: eyeCare.theme,
+                bookmarkedIds: bookmarkedIds.slice(0, 50),
+                enabledCategories: enabledCategories.slice(0, 12),
+                updatedAt: serverTimestamp(),
+              });
+              setCloudSynced(true);
+            } catch (err) {
+              handleFirestoreError(err, OperationType.CREATE, userDocPath);
+            }
+          }
+        }
+      } else {
+        setCloudSynced(false);
+      }
+    });
+    return () => unsubscribe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Sync changes to Firestore whenever an authenticated Google user updates their settings
+  useEffect(() => {
+    const fbUser = auth.currentUser;
+    if (!fbUser || !fbUser.emailVerified || !cloudSynced) return;
+    const userDocPath = `users/${fbUser.uid}`;
+    const timer = setTimeout(async () => {
+      try {
+        await setDoc(doc(db, 'users', fbUser.uid), {
+          uid: fbUser.uid,
+          displayName: (userProfile.name || 'Reader').slice(0, 80),
+          bio: (userProfile.bio || '').slice(0, 240),
+          refreshIntervalMinutes: Math.max(0, Math.min(120, Math.round(refreshIntervalMinutes))),
+          viewMode,
+          theme: eyeCare.theme,
+          bookmarkedIds: bookmarkedIds.slice(0, 50).map((id) => String(id).slice(0, 160)),
+          enabledCategories: (enabledCategories.length > 0
+            ? enabledCategories
+            : DEFAULT_ENABLED_CATEGORIES
+          )
+            .slice(0, 12)
+            .map((c) => String(c).slice(0, 24)),
+          updatedAt: serverTimestamp(),
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.WRITE, userDocPath);
+      }
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [
+    cloudSynced,
+    userProfile.name,
+    userProfile.bio,
+    refreshIntervalMinutes,
+    viewMode,
+    eyeCare.theme,
+    bookmarkedIds,
+    enabledCategories,
+  ]);
+
+  // Persist to localStorage
   useEffect(() => {
     try {
+      localStorage.setItem(STORAGE_KEYS.VIEW_MODE, viewMode);
+      localStorage.setItem(STORAGE_KEYS.REFRESH_MINUTES, String(refreshIntervalMinutes));
+      localStorage.setItem(STORAGE_KEYS.ENABLED_CATS, JSON.stringify(enabledCategories));
       localStorage.setItem(STORAGE_KEYS.EYECARE, JSON.stringify(eyeCare));
-    } catch {
-      // ignore storage errors
-    }
-  }, [eyeCare]);
-
-  useEffect(() => {
-    try {
+      localStorage.setItem(STORAGE_KEYS.USER_PROFILE, JSON.stringify(userProfile));
       localStorage.setItem(STORAGE_KEYS.BOOKMARKS, JSON.stringify(bookmarkedIds));
-    } catch {
-      // ignore
-    }
-  }, [bookmarkedIds]);
-
-  useEffect(() => {
-    try {
+      localStorage.setItem(STORAGE_KEYS.HISTORY, JSON.stringify(historyIds));
       localStorage.setItem(STORAGE_KEYS.SOURCES, JSON.stringify(sources));
     } catch {
       // ignore
     }
-  }, [sources]);
+  }, [
+    viewMode,
+    refreshIntervalMinutes,
+    enabledCategories,
+    eyeCare,
+    userProfile,
+    bookmarkedIds,
+    historyIds,
+    sources,
+  ]);
 
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEYS.CUSTOM_ARTICLES, JSON.stringify(customArticles));
+      if (liveArticles.length > 0) {
+        localStorage.setItem(
+          STORAGE_KEYS.LIVE_ARTICLES,
+          JSON.stringify(liveArticles.slice(0, 90))
+        );
+      }
     } catch {
       // ignore
     }
-  }, [customArticles]);
+  }, [liveArticles]);
 
-  // Combine and filter articles
-  const allArticles = useMemo(
-    () => [...customArticles, ...CURATED_ARTICLES],
-    [customArticles]
+  // 3-Day (72-Hour) Database & Local Cache Purge Function
+  const purgeExpiredArticles = useCallback((): number => {
+    let removedTotal = 0;
+    setLiveArticles((prev) => {
+      const { freshArticles, removedCount } = purgeArticlesOlderThanThreeDays(prev);
+      removedTotal += removedCount;
+      const validIds = new Set([
+        ...freshArticles.map((a) => a.id),
+        ...CURATED_ARTICLES.map((a) => a.id),
+      ]);
+      // Also clean expired article IDs from bookmarks & reading history (which syncs to Firestore)
+      setBookmarkedIds((bPrev) => bPrev.filter((id) => validIds.has(id)));
+      setHistoryIds((hPrev) => hPrev.filter((id) => validIds.has(id)));
+      return freshArticles;
+    });
+    if (removedTotal > 0) {
+      setPurgedExpiredCount((c) => c + removedTotal);
+    }
+    return removedTotal;
+  }, []);
+
+  // Real-time RSS Scanner Function
+  const syncAllFeeds = useCallback(
+    async (currentSources: RssSource[], forceRefresh = false) => {
+      setIsSyncingRss(true);
+      const fetched = await fetchBatchLiveRssFeeds(currentSources, forceRefresh);
+      if (fetched.length > 0) {
+        const { freshArticles, removedCount } = purgeArticlesOlderThanThreeDays(fetched);
+        if (removedCount > 0) {
+          setPurgedExpiredCount((c) => c + removedCount);
+        }
+        setLiveArticles(freshArticles);
+      }
+      const now = new Date();
+      setLastScannedLabel(
+        now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      );
+      setNextScanCountdownSeconds(refreshIntervalMinutes * 60);
+      setIsSyncingRss(false);
+    },
+    [refreshIntervalMinutes]
   );
+
+  // Initial scan on mount + periodic 60-second 3-day retention enforcement
+  useEffect(() => {
+    syncAllFeeds(sources, false);
+    const retentionInterval = setInterval(() => {
+      purgeExpiredArticles();
+    }, 60 * 1000);
+    return () => clearInterval(retentionInterval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Reset countdown when user changes refreshIntervalMinutes in Profile
+  useEffect(() => {
+    setNextScanCountdownSeconds(refreshIntervalMinutes * 60);
+  }, [refreshIntervalMinutes]);
+
+  // Automatic Background RSS Scanner Timer (Every 5 mins by default)
+  useEffect(() => {
+    if (refreshIntervalMinutes <= 0) return;
+    const interval = setInterval(() => {
+      setNextScanCountdownSeconds((prev) => {
+        if (prev <= 1) {
+          syncAllFeeds(sources, true);
+          return refreshIntervalMinutes * 60;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [refreshIntervalMinutes, sources, syncAllFeeds]);
+
+  const handleGoogleLogin = async () => {
+    setIsAuthLoading(true);
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } finally {
+      setIsAuthLoading(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    if (auth.currentUser) {
+      await firebaseSignOut(auth);
+    }
+    setCloudSynced(false);
+    setUserProfile((prev) => ({
+      ...prev,
+      isLoggedIn: false,
+      authProvider: 'local',
+      role: 'Guest Reader',
+    }));
+  };
+
+  const allArticles = useMemo(() => {
+    const { freshArticles } = purgeArticlesOlderThanThreeDays(liveArticles);
+    if (freshArticles.length > 0) {
+      return [...freshArticles, ...CURATED_ARTICLES];
+    }
+    return CURATED_ARTICLES;
+  }, [liveArticles]);
 
   const enabledSourceIds = useMemo(
     () => new Set(sources.filter((s) => s.enabled).map((s) => s.id)),
     [sources]
   );
 
-  const filteredArticles = useMemo(() => {
+  const activeFeedArticles = useMemo(() => {
     return allArticles.filter((article) => {
-      // Keep custom live RSS articles or articles from enabled sources
-      const isSourceEnabled =
-        article.id.startsWith('live-') || enabledSourceIds.has(article.sourceId);
-      if (!isSourceEnabled) return false;
-
-      if (showSavedOnly && !bookmarkedIds.includes(article.id)) return false;
-
+      if (!enabledSourceIds.has(article.sourceId)) return false;
+      if (!enabledCategories.includes(article.category)) return false;
       if (selectedCategory !== 'all' && article.category !== selectedCategory) {
         return false;
       }
-
-      if (searchQuery.trim() !== '') {
-        const q = searchQuery.toLowerCase();
-        const matchTitle = article.title.toLowerCase().includes(q);
-        const matchSub = article.subtitle.toLowerCase().includes(q);
-        const matchSource = article.sourceName.toLowerCase().includes(q);
-        const matchAuthor = article.author.toLowerCase().includes(q);
-        if (!matchTitle && !matchSub && !matchSource && !matchAuthor) return false;
-      }
-
       return true;
     });
-  }, [allArticles, enabledSourceIds, showSavedOnly, bookmarkedIds, selectedCategory, searchQuery]);
+  }, [allArticles, enabledSourceIds, enabledCategories, selectedCategory]);
 
-  // Reset active card index when filter changes
+  const savedArticlesList = useMemo(
+    () => allArticles.filter((a) => bookmarkedIds.includes(a.id)),
+    [allArticles, bookmarkedIds]
+  );
+
+  const historyArticlesList = useMemo(
+    () =>
+      historyIds
+        .map((id) => allArticles.find((a) => a.id === id))
+        .filter((a): a is NewsArticle => Boolean(a)),
+    [allArticles, historyIds]
+  );
+
   useEffect(() => {
     setActiveIndex(0);
-  }, [selectedCategory, showSavedOnly, searchQuery]);
+  }, [selectedCategory]);
 
-  // Keyboard navigation for vertical card deck (Up/Down/J/K)
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (readerArticle || isSourceModalOpen || isCodeModalOpen) return;
-      if (
-        document.activeElement?.tagName === 'INPUT' ||
-        document.activeElement?.tagName === 'TEXTAREA'
-      ) {
-        return;
-      }
-
-      if (e.key === 'ArrowDown' || e.key === 'j' || e.key === 'J') {
-        e.preventDefault();
-        setActiveIndex((prev) => Math.min(filteredArticles.length - 1, prev + 1));
-      } else if (e.key === 'ArrowUp' || e.key === 'k' || e.key === 'K') {
-        e.preventDefault();
-        setActiveIndex((prev) => Math.max(0, prev - 1));
-      } else if (e.key === 'Enter' && filteredArticles[activeIndex]) {
-        setReaderArticle(filteredArticles[activeIndex]);
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [filteredArticles, activeIndex, readerArticle, isSourceModalOpen, isCodeModalOpen]);
+  const handleOpenReader = (article: NewsArticle) => {
+    setReaderArticle(article);
+    setHistoryIds((prev) =>
+      [article.id, ...prev.filter((id) => id !== article.id)].slice(0, 40)
+    );
+  };
 
   const handleUpdateEyeCare = (patch: Partial<EyeCareSettings>) => {
     setEyeCare((prev) => ({ ...prev, ...patch }));
@@ -227,446 +517,258 @@ export default function App() {
     );
   };
 
+  const handleToggleCategoryEnabled = (catId: SpecificCategoryId) => {
+    setEnabledCategories((prev) => {
+      if (prev.includes(catId)) {
+        if (prev.length <= 1) return prev;
+        const next = prev.filter((c) => c !== catId);
+        if (selectedCategory === catId) setSelectedCategory('all');
+        return next;
+      }
+      return [...prev, catId];
+    });
+  };
+
   const handleAddCustomFeed = async (
     name: string,
     url: string,
-    category: Exclude<CategoryId, 'all'>
+    category: SpecificCategoryId
   ) => {
     setIsSyncingRss(true);
     const sourceId = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 
-    // Add to sources list if not already present
+    const newSource: RssSource = {
+      id: sourceId,
+      name,
+      category,
+      feedUrl: url,
+      domain: url.replace(/^https?:\/\//, '').split('/')[0] || 'rss.feed',
+      enabled: true,
+      editorialTagline: `Live RSS syndication stream (${url})`,
+    };
+
     setSources((prev) => {
       if (prev.some((s) => s.id === sourceId)) return prev;
-      return [
-        {
-          id: sourceId,
-          name,
-          category,
-          feedUrl: url,
-          domain: url.replace(/^https?:\/\//, '').split('/')[0] || 'rss.feed',
-          enabled: true,
-          editorialTagline: `Live RSS syndication stream (${url})`,
-        },
-        ...prev,
-      ];
+      return [newSource, ...prev];
     });
+
+    if (!enabledCategories.includes(category)) {
+      setEnabledCategories((prev) => [...prev, category]);
+    }
 
     const liveItems = await fetchLiveRssFeed(url, name, category);
     if (liveItems.length > 0) {
-      setCustomArticles((prev) => [...liveItems, ...prev]);
-    } else {
-      // Fallback synthesized dispatch if remote CORS blocks direct XML
-      const fallbackArticle: NewsArticle = {
-        id: `live-${category}-${Date.now()}`,
-        title: `${name}: Latest Syndicated Editorial Dispatch`,
-        subtitle: `Live RSS feed connected from ${url} and formatted for FlipStream eye-protective reading.`,
-        summary: `Your custom RSS stream (${name}) is now active in the ${category.toUpperCase()} channel.`,
-        contentParagraphs: [
-          `This feed endpoint (${url}) has been registered in your FlipStream syndication directory under the ${category} desk.`,
-          'All incoming dispatches are automatically stripped of tracking scripts, popups, and visual clutter before being rendered in your chosen ocular palette.',
-          'Use the Eye-Protective Studio on the right rail to adjust 2700K amber warmth or enable Bionic Saccadic Reading.'
-        ],
-        keyTakeaways: [
-          `Connected RSS endpoint: ${url}`,
-          'Zero-tracking distraction-free parser enabled.',
-          'Available across iOS, Android, and Responsive viewports.'
-        ],
-        pullQuote: 'Independent RSS syndication restores calm, deliberate reading to the open web.',
-        author: `${name} Desk`,
-        authorRole: 'Syndicated RSS Feed',
-        sourceId,
-        sourceName: name,
-        category,
-        publishedAt: 'Just now',
-        readTimeMinutes: 3,
-        imageUrl: CURATED_ARTICLES.find((a) => a.category === category)?.imageUrl || CURATED_ARTICLES[0].imageUrl,
-        imageCaption: `Fig. 1 — Syndicated feed plate for ${name}.`,
-        articleUrl: url,
-        issueNumber: `CUSTOM RSS · ${category.toUpperCase()}`,
-      };
-      setCustomArticles((prev) => [fallbackArticle, ...prev]);
+      const { freshArticles } = purgeArticlesOlderThanThreeDays(liveItems);
+      setLiveArticles((prev) => [...freshArticles, ...prev]);
     }
 
-    setSelectedCategory(category);
-    setShowSavedOnly(false);
-    setActiveIndex(0);
     setIsSyncingRss(false);
   };
 
-  // Web Speech API Text-to-Speech Narration
-  const handleToggleSpeak = (article: NewsArticle) => {
-    if (!('speechSynthesis' in window)) return;
-    if (speakingArticleId === article.id) {
-      window.speechSynthesis.cancel();
-      setSpeakingArticleId(null);
-      return;
-    }
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(
-      `${article.title}. ${article.subtitle}. ${article.contentParagraphs.join(' ')}`
-    );
-    utterance.rate = 0.98;
-    utterance.onend = () => setSpeakingArticleId(null);
-    utterance.onerror = () => setSpeakingArticleId(null);
-    setSpeakingArticleId(article.id);
-    window.speechSynthesis.speak(utterance);
-  };
-
-  const categories: Array<{ id: CategoryId; label: string }> = [
-    { id: 'all', label: 'All Dispatches' },
-    { id: 'tech', label: 'Tech' },
-    { id: 'world', label: 'World' },
-    { id: 'business', label: 'Business' },
-    { id: 'science', label: 'Science' },
-    { id: 'culture', label: 'Culture' },
-  ];
-
-  const activeStory = filteredArticles[activeIndex] || null;
+  const visibleCategoryTabs = useMemo(() => {
+    return [
+      { id: 'all' as CategoryId, label: 'My Stream' },
+      ...ALL_CATEGORIES.filter((c) => enabledCategories.includes(c.id)).map((c) => ({
+        id: c.id as CategoryId,
+        label: c.label,
+      })),
+    ];
+  }, [enabledCategories]);
 
   return (
     <div
       className={`relative w-screen h-screen overflow-hidden flex flex-col select-none ${palette.canvasBg} ${palette.textPrimary}`}
     >
-      {/* Top Bar Contract: Strictly 1 row, 3 zones separated by gap-8 */}
-      <header
-        className={`h-14 px-4 sm:px-6 border-b ${palette.borderHairline} ${palette.surfaceBg} flex items-center justify-between gap-8 shrink-0 z-30`}
-      >
-        {/* Zone 1: Single text element wordmark */}
-        <a
-          href="#top"
-          onClick={(e) => {
-            e.preventDefault();
-            setSelectedCategory('all');
-            setShowSavedOnly(false);
-          }}
-          className={`text-lg font-display font-bold tracking-tight ${palette.textPrimary} whitespace-nowrap shrink-0`}
+      {/* Top Category Strip on Feed Tab */}
+      {activeTab === 'feed' && (
+        <header
+          className={`h-12 px-4 sm:px-6 ${palette.chromeBg} flex items-center justify-between gap-4 shrink-0 z-30`}
         >
-          FlipStream
-        </a>
+          <div className="flex items-center gap-5 overflow-x-auto scroll-smooth no-scrollbar">
+            {visibleCategoryTabs.map((cat) => {
+              const isActive = selectedCategory === cat.id;
+              return (
+                <button
+                  key={cat.id}
+                  type="button"
+                  onClick={() => setSelectedCategory(cat.id)}
+                  className={`py-1 text-sm whitespace-nowrap shrink-0 transition-colors ${
+                    isActive
+                      ? 'text-[#2B95EB] font-bold'
+                      : 'text-slate-400 hover:text-slate-200 font-medium'
+                  }`}
+                >
+                  {cat.label}
+                </button>
+              );
+            })}
+          </div>
 
-        {/* Zone 2: 5 concise single-line text navigation links */}
-        <nav className="hidden md:flex items-center gap-6 text-sm font-medium">
-          {(['tech', 'world', 'business', 'science', 'culture'] as const).map((catId) => {
-            const isActive = !showSavedOnly && selectedCategory === catId;
-            return (
-              <a
-                key={catId}
-                href={`#${catId}`}
-                onClick={(e) => {
-                  e.preventDefault();
-                  setShowSavedOnly(false);
-                  setSelectedCategory(catId);
-                }}
-                className={`capitalize transition-colors whitespace-nowrap shrink-0 py-1 border-b-2 ${
-                  isActive
-                    ? `border-amber-400 ${palette.textPrimary} font-semibold`
-                    : `border-transparent ${palette.textSecondary} hover:${palette.textPrimary}`
-                }`}
-              >
-                {catId}
-              </a>
-            );
-          })}
-        </nav>
-
-        {/* Zone 3: 1 primary action */}
-        <div className="flex items-center shrink-0">
           <button
             type="button"
-            onClick={() => setIsSourceModalOpen(true)}
-            className="px-4 py-2 text-xs font-semibold bg-amber-500 text-slate-950 rounded-lg hover:bg-amber-400 transition-colors whitespace-nowrap shrink-0"
+            disabled={isSyncingRss}
+            onClick={() => syncAllFeeds(sources, true)}
+            title="Live RSS Auto-Scanner (3-Day Retention Active — Click to scan now)"
+            className="text-[11px] font-mono-num text-slate-400 hover:text-white flex items-center gap-1.5 shrink-0"
           >
-            Manage RSS Feeds
+            <RefreshCw
+              className={`w-3.5 h-3.5 ${isSyncingRss ? 'animate-spin text-[#38BDF8]' : ''}`}
+            />
+            <span className="hidden sm:inline">
+              {isSyncingRss
+                ? 'Scanning...'
+                : refreshIntervalMinutes > 0
+                ? `${Math.floor(nextScanCountdownSeconds / 60)}:${String(
+                    nextScanCountdownSeconds % 60
+                  ).padStart(2, '0')}`
+                : 'Live'}
+            </span>
           </button>
-        </div>
-      </header>
-
-      {/* Main 3-Column Editorial Studio Workspace (Full 1440px Desktop Presence + Mobile Ergonomics) */}
-      <div className="flex-1 min-h-0 flex overflow-hidden relative">
-        {/* Left Curatorial Rail (Desktop lg+) */}
-        <aside
-          className={`hidden lg:flex w-68 border-r ${palette.borderHairline} ${palette.surfaceBg} flex-col justify-between p-4 overflow-y-auto no-scrollbar shrink-0`}
-        >
-          <div className="space-y-6">
-            {/* Interactive Platform Viewport Switcher (Responsive / iOS 18 / Android 15) */}
-            <div className="space-y-2">
-              <div className={`text-xs font-medium ${palette.textSecondary}`}>
-                Platform Presentation
-              </div>
-              <div className={`p-1 rounded-xl border ${palette.borderHairline} ${palette.canvasBg} grid grid-cols-3 gap-1`}>
-                <button
-                  type="button"
-                  onClick={() => setDeviceMode('responsive')}
-                  className={`py-1.5 px-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1 transition-colors whitespace-nowrap ${
-                    deviceMode === 'responsive'
-                      ? `${palette.elevatedBg} ${palette.textPrimary} shadow-sm font-semibold`
-                      : palette.textMuted
-                  }`}
-                >
-                  <Monitor className="w-3.5 h-3.5" />
-                  <span>Full</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDeviceMode('ios')}
-                  className={`py-1.5 px-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1 transition-colors whitespace-nowrap ${
-                    deviceMode === 'ios'
-                      ? `${palette.elevatedBg} ${palette.textPrimary} shadow-sm font-semibold`
-                      : palette.textMuted
-                  }`}
-                >
-                  <Smartphone className="w-3.5 h-3.5" />
-                  <span>iOS 18</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDeviceMode('android')}
-                  className={`py-1.5 px-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1 transition-colors whitespace-nowrap ${
-                    deviceMode === 'android'
-                      ? `${palette.elevatedBg} ${palette.textPrimary} shadow-sm font-semibold`
-                      : palette.textMuted
-                  }`}
-                >
-                  <Smartphone className="w-3.5 h-3.5" />
-                  <span>Android</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Search Filter Input */}
-            <div className="relative">
-              <Search className={`w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 ${palette.textMuted}`} />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Filter stories or authors..."
-                className={`w-full pl-9 pr-3 py-2 rounded-xl border ${palette.borderHairline} ${palette.canvasBg} text-xs focus:outline-none focus:border-amber-400`}
-              />
-            </div>
-
-            {/* Editorial Editions & Saved Bookmarks */}
-            <div className="space-y-1">
-              <div className={`text-xs font-medium ${palette.textSecondary} px-2 mb-1.5`}>
-                Editorial Channels
-              </div>
-              {categories.map((cat) => {
-                const active = !showSavedOnly && selectedCategory === cat.id;
-                return (
-                  <button
-                    key={cat.id}
-                    type="button"
-                    onClick={() => {
-                      setShowSavedOnly(false);
-                      setSelectedCategory(cat.id);
-                    }}
-                    className={`w-full min-h-[38px] px-3 py-2 rounded-xl text-xs font-medium flex items-center justify-between transition-colors ${
-                      active
-                        ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30 font-semibold'
-                        : `${palette.textSecondary} hover:${palette.elevatedBg}`
-                    }`}
-                  >
-                    <span className="flex items-center gap-2">
-                      <Compass className="w-3.5 h-3.5" />
-                      <span>{cat.label}</span>
-                    </span>
-                    <span className="font-mono-num text-[11px] opacity-75">
-                      {cat.id === 'all'
-                        ? allArticles.length
-                        : allArticles.filter((a) => a.category === cat.id).length}
-                    </span>
-                  </button>
-                );
-              })}
-
-              <button
-                type="button"
-                onClick={() => setShowSavedOnly(true)}
-                className={`w-full min-h-[38px] px-3 py-2 rounded-xl text-xs font-medium flex items-center justify-between transition-colors mt-2 ${
-                  showSavedOnly
-                    ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30 font-semibold'
-                    : `${palette.textSecondary} hover:${palette.elevatedBg}`
-                }`}
-              >
-                <span className="flex items-center gap-2">
-                  <Bookmark className="w-3.5 h-3.5" />
-                  <span>Saved Reading List</span>
-                </span>
-                <span className="font-mono-num text-[11px]">{bookmarkedIds.length}</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Bottom Native iOS & Android Code Export Button */}
-          <div className={`pt-4 border-t ${palette.borderHairline} space-y-2`}>
-            <button
-              type="button"
-              onClick={() => setIsCodeModalOpen(true)}
-              className={`w-full min-h-[42px] px-3 py-2.5 rounded-xl border ${palette.borderHairline} ${palette.elevatedBg} text-xs font-medium flex items-center justify-between hover:border-amber-400/50 transition-colors`}
-            >
-              <span className="flex items-center gap-2">
-                <Code2 className="w-4 h-4 text-amber-400" />
-                <span>iOS & Android Native Code</span>
-              </span>
-              <span className={`text-[11px] font-mono-num ${palette.textMuted}`}>Swift/KT</span>
-            </button>
-          </div>
-        </aside>
-
-        {/* Center Stage: Vertical Swipe Magazine Card Deck (Wrapped in Device Shell when iOS/Android selected) */}
-        <main className="flex-1 min-w-0 h-full relative overflow-hidden">
-          <DeviceShellWrapper deviceMode={deviceMode} palette={palette}>
-            <VerticalCardDeck
-              articles={filteredArticles}
-              activeIndex={activeIndex}
-              onSelectIndex={setActiveIndex}
-              onOpenReader={(article) => setReaderArticle(article)}
-              bookmarkedIds={bookmarkedIds}
-              onToggleBookmark={handleToggleBookmark}
-              eyeCare={eyeCare}
-              palette={palette}
-              deviceMode={deviceMode}
-              speakingArticleId={speakingArticleId}
-              onToggleSpeak={handleToggleSpeak}
-            />
-          </DeviceShellWrapper>
-        </main>
-
-        {/* Right Ocular Comfort & Active Dispatch Inspector (Desktop xl+) */}
-        <aside
-          className={`hidden xl:flex w-80 border-l ${palette.borderHairline} ${palette.surfaceBg} flex-col justify-between p-5 overflow-y-auto no-scrollbar shrink-0`}
-        >
-          <div className="space-y-6">
-            <EyeCarePanel
-              eyeCare={eyeCare}
-              onUpdate={handleUpdateEyeCare}
-              onReset={() => setEyeCare(DEFAULT_EYECARE)}
-              palette={palette}
-            />
-
-            {/* Active Story Quick Takeaways */}
-            {activeStory && (
-              <div className={`pt-5 border-t ${palette.borderHairline} space-y-3`}>
-                <div className="flex items-center justify-between">
-                  <span className={`text-xs font-semibold uppercase tracking-wider ${palette.accentText}`}>
-                    Current Card Briefing
-                  </span>
-                  <span className={`text-[11px] font-mono-num ${palette.textMuted}`}>
-                    {activeIndex + 1} of {filteredArticles.length}
-                  </span>
-                </div>
-
-                <h4 className="text-sm font-display font-semibold leading-snug">
-                  {activeStory.title}
-                </h4>
-
-                <ul className={`space-y-2 text-xs ${palette.textSecondary}`}>
-                  {activeStory.keyTakeaways.map((item, idx) => (
-                    <li key={idx} className="flex items-start gap-2">
-                      <span className={`font-mono-num text-[11px] ${palette.textMuted}`}>
-                        0{idx + 1}.
-                      </span>
-                      <span>{renderBionicText(item, eyeCare.bionicReading)}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
-
-          <div className={`pt-4 border-t ${palette.borderHairline} text-[11px] ${palette.textMuted} flex items-center justify-between`}>
-            <span>Swipe or press J / K to flip</span>
-            <span className="font-mono-num">{sources.filter((s) => s.enabled).length} RSS Feeds</span>
-          </div>
-        </aside>
-      </div>
-
-      {/* Mobile & Tablet Thumb-Zone Navigation Bar (<= 15% viewport sticky cap, 44x44px hitboxes) */}
-      <nav
-        className={`lg:hidden h-14 px-2 border-t ${palette.borderHairline} ${palette.surfaceBg}/95 backdrop-blur-md grid grid-cols-5 items-center shrink-0 z-30`}
-      >
-        <button
-          type="button"
-          onClick={() => {
-            setShowSavedOnly(false);
-            setSelectedCategory('all');
-          }}
-          className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium ${
-            !showSavedOnly ? palette.accentText : palette.textSecondary
-          }`}
-        >
-          <BookOpen className="w-4 h-4" />
-          <span>Flip Deck</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => {
-            const order: CategoryId[] = ['all', 'tech', 'world', 'business', 'science', 'culture'];
-            const next = order[(order.indexOf(selectedCategory) + 1) % order.length];
-            setShowSavedOnly(false);
-            setSelectedCategory(next);
-          }}
-          className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium ${palette.textSecondary}`}
-        >
-          <Compass className="w-4 h-4" />
-          <span className="capitalize">{selectedCategory}</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setShowSavedOnly(!showSavedOnly)}
-          className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium ${
-            showSavedOnly ? palette.accentText : palette.textSecondary
-          }`}
-        >
-          <Bookmark className="w-4 h-4" />
-          <span>Saved ({bookmarkedIds.length})</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setIsMobileEyeCareOpen(true)}
-          className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium ${palette.textSecondary}`}
-        >
-          <Eye className="w-4 h-4" />
-          <span>Eye-Care</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setIsCodeModalOpen(true)}
-          className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium ${palette.textSecondary}`}
-        >
-          <Code2 className="w-4 h-4" />
-          <span>iOS/Android</span>
-        </button>
-      </nav>
-
-      {/* Mobile Eye-Care Drawer Sheet */}
-      {isMobileEyeCareOpen && (
-        <div
-          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-end justify-center"
-          onClick={() => setIsMobileEyeCareOpen(false)}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className={`w-full max-w-lg rounded-t-3xl border-t ${palette.borderHairline} ${palette.canvasBg} p-6 max-h-[85vh] overflow-y-auto`}
-          >
-            <div className="w-10 h-1.5 rounded-full bg-slate-600/50 mx-auto mb-4" />
-            <EyeCarePanel
-              eyeCare={eyeCare}
-              onUpdate={handleUpdateEyeCare}
-              onReset={() => setEyeCare(DEFAULT_EYECARE)}
-              palette={palette}
-              onCloseModal={() => setIsMobileEyeCareOpen(false)}
-            />
-          </div>
-        </div>
+        </header>
       )}
 
-      {/* Distraction-Free Editorial Reader Modal */}
+      {/* Main Content Viewport */}
+      <main className="flex-1 min-h-0 w-full relative overflow-hidden">
+        {activeTab === 'feed' && (
+          <VerticalCardDeck
+            articles={activeFeedArticles}
+            activeIndex={activeIndex}
+            onSelectIndex={setActiveIndex}
+            onOpenReader={handleOpenReader}
+            bookmarkedIds={bookmarkedIds}
+            onToggleBookmark={handleToggleBookmark}
+            eyeCare={eyeCare}
+            palette={palette}
+            viewMode={viewMode}
+          />
+        )}
+
+        {activeTab === 'explore' && (
+          <ExploreView
+            articles={allArticles.filter((a) => enabledSourceIds.has(a.sourceId))}
+            sources={sources}
+            enabledCategories={enabledCategories}
+            onToggleCategoryEnabled={handleToggleCategoryEnabled}
+            bookmarkedIds={bookmarkedIds}
+            onToggleBookmark={handleToggleBookmark}
+            onOpenReader={handleOpenReader}
+            onSelectCategoryInFeed={(cat) => {
+              setSelectedCategory(cat);
+              setActiveTab('feed');
+            }}
+            onToggleSource={handleToggleSource}
+            onAddCustomFeed={handleAddCustomFeed}
+            onRefreshAllFeeds={() => syncAllFeeds(sources, true)}
+            isSyncing={isSyncingRss}
+            lastScannedLabel={lastScannedLabel}
+            palette={palette}
+          />
+        )}
+
+        {activeTab === 'profile' && (
+          <ProfileView
+            user={userProfile}
+            onUpdateUser={setUserProfile}
+            onGoogleLogin={handleGoogleLogin}
+            onSignOut={handleSignOut}
+            isAuthLoading={isAuthLoading}
+            cloudSynced={cloudSynced}
+            refreshIntervalMinutes={refreshIntervalMinutes}
+            onChangeRefreshInterval={setRefreshIntervalMinutes}
+            lastScannedLabel={lastScannedLabel}
+            nextScanCountdownSeconds={nextScanCountdownSeconds}
+            onScanNow={() => syncAllFeeds(sources, true)}
+            onPurgeExpiredNow={purgeExpiredArticles}
+            purgedExpiredCount={purgedExpiredCount}
+            isSyncingRss={isSyncingRss}
+            enabledCategories={enabledCategories}
+            onToggleCategoryEnabled={handleToggleCategoryEnabled}
+            savedArticles={savedArticlesList}
+            historyArticles={historyArticlesList}
+            onClearHistory={() => setHistoryIds([])}
+            onOpenReader={handleOpenReader}
+            onToggleBookmark={handleToggleBookmark}
+            eyeCare={eyeCare}
+            onUpdateEyeCare={handleUpdateEyeCare}
+            onResetEyeCare={() => setEyeCare(DEFAULT_EYECARE)}
+            viewMode={viewMode}
+            onChangeViewMode={setViewMode}
+            sources={sources}
+            palette={palette}
+          />
+        )}
+      </main>
+
+      {/* Sleek Obsidian 3-Icon Bottom Navigation Bar */}
+      <nav
+        aria-label="Primary Bottom Navigation"
+        className={`h-14 px-4 ${palette.chromeBg} border-t border-white/10 flex flex-col items-center justify-between pt-2 pb-1.5 shrink-0 z-30`}
+      >
+        <div className="w-full max-w-md grid grid-cols-3 items-center">
+          {/* Left Icon: Search / Discover */}
+          <button
+            type="button"
+            onClick={() => setActiveTab('explore')}
+            aria-label="Discover & Search"
+            className={`flex items-center justify-center py-1 transition-colors ${
+              activeTab === 'explore' ? 'text-white' : 'text-slate-500 hover:text-slate-300'
+            }`}
+          >
+            <Search className="w-5 h-5 stroke-[2.2]" />
+          </button>
+
+          {/* Center Icon: Home / Main Stream */}
+          <button
+            type="button"
+            onClick={() => setActiveTab('feed')}
+            aria-label="Home Stream"
+            className={`flex items-center justify-center py-1 transition-colors ${
+              activeTab === 'feed' ? 'text-white' : 'text-slate-500 hover:text-slate-300'
+            }`}
+          >
+            <Home
+              className={`w-5 h-5 stroke-[2.2] ${
+                activeTab === 'feed' ? 'fill-white text-white' : ''
+              }`}
+            />
+          </button>
+
+          {/* Right Icon: Profile / Lunar Avatar */}
+          <button
+            type="button"
+            onClick={() => setActiveTab('profile')}
+            aria-label="Profile & Saved"
+            className={`flex items-center justify-center py-0.5 transition-colors ${
+              activeTab === 'profile' ? 'text-white' : 'text-slate-500 hover:text-slate-300'
+            }`}
+          >
+            {userProfile.isLoggedIn ? (
+              <div
+                className={`rounded-full p-0.5 ${
+                  activeTab === 'profile' ? 'ring-1.5 ring-[#2B95EB]' : ''
+                }`}
+              >
+                <LunarAvatar
+                  photoUrl={userProfile.photoUrl}
+                  sizeClass="w-6 h-6"
+                  roundedClass="rounded-full"
+                />
+              </div>
+            ) : (
+              <User
+                className={`w-5 h-5 stroke-[2.2] ${
+                  activeTab === 'profile' ? 'fill-white text-white' : ''
+                }`}
+              />
+            )}
+          </button>
+        </div>
+
+        {/* Bottom Home Indicator Pill */}
+        <div className="w-28 h-1 rounded-full bg-white/30" />
+      </nav>
+
+      {/* Full-Screen Editorial Article Reader Modal */}
       <ReaderModal
         article={readerArticle}
         onClose={() => setReaderArticle(null)}
@@ -675,49 +777,29 @@ export default function App() {
         eyeCare={eyeCare}
         onUpdateEyeCare={handleUpdateEyeCare}
         palette={palette}
-        isSpeaking={readerArticle ? speakingArticleId === readerArticle.id : false}
-        onToggleSpeak={handleToggleSpeak}
         hasPrev={activeIndex > 0}
-        hasNext={activeIndex < filteredArticles.length - 1}
+        hasNext={activeIndex < activeFeedArticles.length - 1}
         onPrevArticle={() => {
           if (activeIndex > 0) {
             const nextIdx = activeIndex - 1;
             setActiveIndex(nextIdx);
-            setReaderArticle(filteredArticles[nextIdx]);
+            handleOpenReader(activeFeedArticles[nextIdx]);
           }
         }}
         onNextArticle={() => {
-          if (activeIndex < filteredArticles.length - 1) {
+          if (activeIndex < activeFeedArticles.length - 1) {
             const nextIdx = activeIndex + 1;
             setActiveIndex(nextIdx);
-            setReaderArticle(filteredArticles[nextIdx]);
+            handleOpenReader(activeFeedArticles[nextIdx]);
           }
         }}
       />
 
-      {/* RSS Source & Feed Syndication Manager Modal */}
-      <SourceManagerModal
-        isOpen={isSourceModalOpen}
-        onClose={() => setIsSourceModalOpen(false)}
-        sources={sources}
-        onToggleSource={handleToggleSource}
-        onAddCustomFeed={handleAddCustomFeed}
-        isSyncing={isSyncingRss}
-        palette={palette}
-      />
-
-      {/* Native iOS (SwiftUI) & Android (Jetpack Compose) Code Exporter Modal */}
-      <NativeCodeModal
-        isOpen={isCodeModalOpen}
-        onClose={() => setIsCodeModalOpen(false)}
-        palette={palette}
-      />
-
-      {/* Global Eye-Protective 2700K Amber Blue-Light Filter & Sub-Pixel Dimmer Overlay */}
+      {/* Global Eye-Protective Warm Filter & Dimmer Overlay */}
       {eyeCare.amberShieldPercent > 0 && (
         <div
           aria-hidden="true"
-          className="pointer-events-none fixed inset-0 z-[60] transition-opacity duration-300"
+          className="pointer-events-none fixed inset-0 z-[60]"
           style={{
             backgroundColor: `rgba(245, 158, 11, ${(eyeCare.amberShieldPercent / 100) * 0.24})`,
             mixBlendMode: palette.isDark ? 'screen' : 'multiply',
@@ -728,7 +810,7 @@ export default function App() {
       {eyeCare.dimmerPercent > 0 && (
         <div
           aria-hidden="true"
-          className="pointer-events-none fixed inset-0 z-[61] bg-black transition-opacity duration-300"
+          className="pointer-events-none fixed inset-0 z-[61] bg-black"
           style={{
             opacity: eyeCare.dimmerPercent / 100,
           }}

@@ -3,15 +3,20 @@
 
 @layer base {
   :root {
-    --font-display: 'Playfair Display', Georgia, serif;
+    --font-display: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
     --font-serif: 'Source Serif 4', Georgia, serif;
     --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
     --font-mono: 'JetBrains Mono', monospace;
   }
 
+  html {
+    scroll-behavior: smooth;
+  }
+
   body {
     font-family: var(--font-sans);
     overflow-x: hidden;
+    overscroll-behavior-y: none;
   }
 
   h1, h2, h3, .font-display {
@@ -28,7 +33,6 @@
   }
 }
 
-/* Custom subtle scrollbars for vertical snap deck and sidebars */
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
@@ -37,12 +41,14 @@
   scrollbar-width: none;
 }
 
-.snap-y-mandatory {
-  scroll-snap-type: y mandatory;
+/* Smooth, gentle vertical card scrolling that never jerks or causes dizziness */
+.smooth-scroll-container {
+  scroll-behavior: smooth;
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  scroll-snap-type: y proximity;
 }
 
-.snap-card-center {
+.smooth-snap-card {
   scroll-snap-align: start;
-  scroll-snap-stop: always;
 }

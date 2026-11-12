@@ -1,0 +1,73 @@
+{
+  "entities": {
+    "UserReaderSettings": {
+      "title": "UserReaderSettings",
+      "description": "Stores a signed-in user's FlipStream news reader preferences, eye-care theme, auto-refresh interval, enabled categories, and saved article IDs.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the owner",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Reader display name",
+          "maxLength": 80
+        },
+        "bio": {
+          "type": "string",
+          "description": "Short reader bio and topic interests",
+          "maxLength": 240
+        },
+        "refreshIntervalMinutes": {
+          "type": "number",
+          "description": "Automatic RSS refresh interval in minutes (0 for manual, or 1, 5, 15, 30)"
+        },
+        "viewMode": {
+          "type": "string",
+          "enum": ["cards", "grid"],
+          "maxLength": 10
+        },
+        "theme": {
+          "type": "string",
+          "enum": ["oled-midnight", "warm-sepia", "eink-slate", "gallery-stark"],
+          "maxLength": 24
+        },
+        "bookmarkedIds": {
+          "type": "array",
+          "description": "Bounded list of saved article IDs (max 50)"
+        },
+        "enabledCategories": {
+          "type": "array",
+          "description": "Bounded list of enabled news category IDs (max 12)"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last profile sync"
+        }
+      },
+      "required": [
+        "uid",
+        "displayName",
+        "bio",
+        "refreshIntervalMinutes",
+        "viewMode",
+        "theme",
+        "bookmarkedIds",
+        "enabledCategories",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserReaderSettings"
+      },
+      "description": "Owner-only document storing reader settings, auto-refresh interval, enabled categories, and saved bookmarks."
+    }
+  }
+}

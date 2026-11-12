@@ -20,8 +20,8 @@ export const EyeCarePanel: React.FC<EyeCarePanelProps> = ({
 }) => {
   const themeOrder: ThemeId[] = [
     'oled-midnight',
-    'warm-sepia',
     'eink-slate',
+    'warm-sepia',
     'gallery-stark',
   ];
 
@@ -31,7 +31,7 @@ export const EyeCarePanel: React.FC<EyeCarePanelProps> = ({
         <div className="flex items-center gap-2">
           <Eye className={`w-4 h-4 ${palette.accentText}`} />
           <h3 className="text-sm font-semibold tracking-tight">
-            Eye-Protective Studio & Themes
+            Eye-Care & Theme Studio
           </h3>
         </div>
         {onCloseModal ? (
@@ -55,12 +55,12 @@ export const EyeCarePanel: React.FC<EyeCarePanelProps> = ({
         )}
       </div>
 
-      {/* 1. Ocular Surface Palettes */}
+      {/* 1. Surface Palettes */}
       <div className="space-y-2">
         <label className={`text-xs font-medium ${palette.textSecondary} block`}>
-          01. Surface Palette
+          01. Surface Theme
         </label>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-2 gap-2.5">
           {themeOrder.map((tId) => {
             const t = THEME_PALETTES[tId];
             const active = eyeCare.theme === tId;
@@ -69,11 +69,11 @@ export const EyeCarePanel: React.FC<EyeCarePanelProps> = ({
                 key={tId}
                 type="button"
                 onClick={() => onUpdate({ theme: tId })}
-                className={`p-2.5 rounded-xl border text-left transition-all ${
+                className={`p-3 rounded-xl border text-left transition-colors ${
                   active
-                    ? 'border-amber-400 ring-1 ring-amber-400/40'
-                    : `${palette.borderHairline} opacity-80 hover:opacity-100`
-                } ${palette.surfaceBg}`}
+                    ? 'border-sky-500 bg-sky-500/10'
+                    : `${palette.borderHairline} ${palette.canvasBg}`
+                }`}
               >
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-xs font-semibold truncate">{t.name}</span>
@@ -82,9 +82,9 @@ export const EyeCarePanel: React.FC<EyeCarePanelProps> = ({
                       tId === 'oled-midnight'
                         ? 'bg-black'
                         : tId === 'warm-sepia'
-                        ? 'bg-[#F5F0E6]'
+                        ? 'bg-[#F6F4F0]'
                         : tId === 'eink-slate'
-                        ? 'bg-[#1E2128]'
+                        ? 'bg-[#1C202B]'
                         : 'bg-white'
                     }`}
                   />
@@ -98,14 +98,14 @@ export const EyeCarePanel: React.FC<EyeCarePanelProps> = ({
         </div>
       </div>
 
-      {/* 2. 2700K Blue-Light Amber Shield */}
+      {/* 2. Optional Night-Shift Blue-Light Filter */}
       <div className="space-y-2">
         <div className="flex items-center justify-between text-xs">
           <span className={`font-medium flex items-center gap-1.5 ${palette.textSecondary}`}>
-            <Sun className="w-3.5 h-3.5 text-amber-400" />
-            <span>2700K Blue-Light Filter</span>
+            <Sun className="w-3.5 h-3.5 text-sky-400" />
+            <span>Blue-Light Reduction Filter</span>
           </span>
-          <span className="font-mono-num text-amber-400 font-medium">
+          <span className="font-mono-num text-sky-400 font-medium">
             {eyeCare.amberShieldPercent}%
           </span>
         </div>
@@ -116,12 +116,12 @@ export const EyeCarePanel: React.FC<EyeCarePanelProps> = ({
           step={5}
           value={eyeCare.amberShieldPercent}
           onChange={(e) => onUpdate({ amberShieldPercent: Number(e.target.value) })}
-          className="w-full accent-amber-400 cursor-pointer h-1.5 rounded-lg"
+          className="w-full accent-sky-500 cursor-pointer h-1.5 rounded-lg"
         />
         <div className={`flex justify-between text-[11px] font-mono-num ${palette.textMuted}`}>
-          <span>0% (Neutral)</span>
-          <span>25% (Evening)</span>
-          <span>65% (Night Shift)</span>
+          <span>0% (Clean Default)</span>
+          <span>25% (Soft)</span>
+          <span>65% (Max Night)</span>
         </div>
       </div>
 
@@ -130,7 +130,7 @@ export const EyeCarePanel: React.FC<EyeCarePanelProps> = ({
         <div className="flex items-center justify-between text-xs">
           <span className={`font-medium flex items-center gap-1.5 ${palette.textSecondary}`}>
             <Moon className="w-3.5 h-3.5 text-sky-400" />
-            <span>OLED Sub-Pixel Dimmer</span>
+            <span>OLED Screen Dimmer</span>
           </span>
           <span className="font-mono-num">{eyeCare.dimmerPercent}%</span>
         </div>
@@ -141,7 +141,7 @@ export const EyeCarePanel: React.FC<EyeCarePanelProps> = ({
           step={5}
           value={eyeCare.dimmerPercent}
           onChange={(e) => onUpdate({ dimmerPercent: Number(e.target.value) })}
-          className="w-full accent-sky-400 cursor-pointer h-1.5 rounded-lg"
+          className="w-full accent-sky-500 cursor-pointer h-1.5 rounded-lg"
         />
       </div>
 
@@ -149,30 +149,30 @@ export const EyeCarePanel: React.FC<EyeCarePanelProps> = ({
       <div className="space-y-2">
         <label className={`text-xs font-medium flex items-center gap-1.5 ${palette.textSecondary}`}>
           <Type className="w-3.5 h-3.5" />
-          <span>02. Editorial Typeface & Scale</span>
+          <span>02. Font Style & Text Size</span>
         </label>
         <div className="grid grid-cols-2 gap-2">
-          <button
-            type="button"
-            onClick={() => onUpdate({ fontFamily: 'serif' })}
-            className={`min-h-[40px] px-3 py-1.5 rounded-lg border text-xs font-editorial font-medium transition-colors ${
-              eyeCare.fontFamily === 'serif'
-                ? 'border-amber-400 bg-amber-500/15 text-amber-300'
-                : `${palette.borderHairline} ${palette.surfaceBg} ${palette.textSecondary}`
-            }`}
-          >
-            Source Serif 4
-          </button>
           <button
             type="button"
             onClick={() => onUpdate({ fontFamily: 'sans' })}
             className={`min-h-[40px] px-3 py-1.5 rounded-lg border text-xs font-sans font-medium transition-colors ${
               eyeCare.fontFamily === 'sans'
-                ? 'border-amber-400 bg-amber-500/15 text-amber-300'
-                : `${palette.borderHairline} ${palette.surfaceBg} ${palette.textSecondary}`
+                ? 'border-sky-500 bg-sky-500/15 text-sky-300'
+                : `${palette.borderHairline} ${palette.canvasBg} ${palette.textSecondary}`
             }`}
           >
-            Plus Jakarta Sans
+            Modern Sans
+          </button>
+          <button
+            type="button"
+            onClick={() => onUpdate({ fontFamily: 'serif' })}
+            className={`min-h-[40px] px-3 py-1.5 rounded-lg border text-xs font-editorial font-medium transition-colors ${
+              eyeCare.fontFamily === 'serif'
+                ? 'border-sky-500 bg-sky-500/15 text-sky-300'
+                : `${palette.borderHairline} ${palette.canvasBg} ${palette.textSecondary}`
+            }`}
+          >
+            Book Serif
           </button>
         </div>
 
@@ -184,8 +184,8 @@ export const EyeCarePanel: React.FC<EyeCarePanelProps> = ({
               onClick={() => onUpdate({ fontScale: sz })}
               className={`min-h-[38px] rounded-lg border text-xs font-mono-num uppercase transition-colors ${
                 eyeCare.fontScale === sz
-                  ? 'border-amber-400 bg-amber-500/15 text-amber-300 font-semibold'
-                  : `${palette.borderHairline} ${palette.surfaceBg} ${palette.textSecondary}`
+                  ? 'border-sky-500 bg-sky-500/15 text-sky-300 font-semibold'
+                  : `${palette.borderHairline} ${palette.canvasBg} ${palette.textSecondary}`
               }`}
             >
               {sz}
@@ -194,20 +194,20 @@ export const EyeCarePanel: React.FC<EyeCarePanelProps> = ({
         </div>
       </div>
 
-      {/* 5. Bionic Reading & Motion */}
-      <div className={`pt-3 border-t ${palette.borderHairline} space-y-2`}>
+      {/* 5. Bionic Reading */}
+      <div className={`pt-3 border-t ${palette.borderHairline}`}>
         <button
           type="button"
           onClick={() => onUpdate({ bionicReading: !eyeCare.bionicReading })}
           className={`w-full min-h-[42px] px-3 py-2 rounded-xl border flex items-center justify-between text-xs font-medium transition-colors ${
             eyeCare.bionicReading
-              ? 'border-amber-400/60 bg-amber-500/15 text-amber-300'
-              : `${palette.borderHairline} ${palette.surfaceBg} ${palette.textSecondary}`
+              ? 'border-sky-500/60 bg-sky-500/15 text-sky-300'
+              : `${palette.borderHairline} ${palette.canvasBg} ${palette.textSecondary}`
           }`}
         >
           <span className="flex items-center gap-2">
             <Sparkles className="w-3.5 h-3.5" />
-            <span>Bionic Saccadic Reading</span>
+            <span>Bionic Fast Reading</span>
           </span>
           <span className="font-mono-num uppercase">
             {eyeCare.bionicReading ? 'Active' : 'Off'}

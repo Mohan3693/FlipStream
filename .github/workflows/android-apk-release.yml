@@ -1,0 +1,125 @@
+name: Build Android 14+ APK & GitHub Release
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-android-apk:
+    name: Build FlipStream APK (Android 14+ / API 34-35)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Set up JDK 21 for Android Gradle Plugin
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Android SDK (API 34 & 35 - Android 14+)
+        uses: android-actions/setup-android@v3
+
+      - name: Install Web Dependencies & Build Production Bundle
+        run: |
+          npm ci
+          npm run build
+
+      - name: Add Capacitor Android & Configure API 34+ (Android 14/15)
+        run: |
+          npm install --no-save @capacitor/core @capacitor/cli @capacitor/android
+          if [ ! -d "android" ]; then
+            npx cap add android
+          fi
+          npx cap sync android
+          cat << 'EOF' > android/variables.gradle
+          ext {
+              minSdkVersion = 34
+              compileSdkVersion = 35
+              targetSdkVersion = 35
+              androidxActivityVersion = '1.9.2'
+              androidxAppCompatVersion = '1.7.0'
+              androidxCoordinatorLayoutVersion = '1.2.0'
+              androidxCoreVersion = '1.13.1'
+              androidxFragmentVersion = '1.8.3'
+              coreSplashScreenVersion = '1.0.1'
+              androidxWebkitVersion = '1.12.0'
+              junitVersion = '4.13.2'
+              androidxJunitVersion = '1.2.1'
+              androidxEspressoCoreVersion = '3.6.1'
+              cordovaAndroidVersion = '10.1.1'
+          }
+          EOF
+
+      - name: Generate Release Signing Keystore & Sign APK
+        run: |
+          keytool -genkey -v \
+            -keystore flipstream-release.keystore \
+            -alias flipstream \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass flipstream2026 \
+            -keypass flipstream2026 \
+            -dname "CN=FlipStream, OU=Mobile, O=FlipStream, L=SanFrancisco, S=CA, C=US"
+
+      - name: Assemble & Sign Android 14+ Release APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug assembleRelease
+          cp app/build/outputs/apk/debug/app-debug.apk ../FlipStream-Android14-debug.apk
+          BUILD_TOOLS_DIR=$(ls -d $ANDROID_HOME/build-tools/* | tail -n 1)
+          $BUILD_TOOLS_DIR/zipalign -v -p 4 \
+            app/build/outputs/apk/release/app-release-unsigned.apk \
+            ../FlipStream-Android14-aligned.apk
+          $BUILD_TOOLS_DIR/apksigner sign \
+            --ks ../flipstream-release.keystore \
+            --ks-key-alias flipstream \
+            --ks-pass pass:flipstream2026 \
+            --key-pass pass:flipstream2026 \
+            --out ../FlipStream-Android14-release.apk \
+            ../FlipStream-Android14-aligned.apk
+
+      - name: Upload Signed Android 14+ APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlipStream-Android14-APK
+          path: |
+            FlipStream-Android14-release.apk
+            FlipStream-Android14-debug.apk
+
+      - name: Publish GitHub Release with APK on Push
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: "FlipStream Android 14+ APK Release (Build #${{ github.run_number }})"
+          body: |
+            ## FlipStream for Android 14+ (API 34 / 35)
+            - **Target SDK**: Android 14 / Android 15 (`minSdkVersion 34`, `targetSdkVersion 35`)
+            - **Live RSS Engine**: Automatic 5-minute RSS background scanner across 24 publishers
+            - **3-Day Database Retention**: Automatically purges articles older than 72 hours
+            - **APK Downloads**:
+              - `FlipStream-Android14-release.apk` (Signed Release APK for all Android 14+ phones)
+              - `FlipStream-Android14-debug.apk` (Debug APK)
+          files: |
+            FlipStream-Android14-release.apk
+            FlipStream-Android14-debug.apk
+          draft: false
+          prerelease: false
